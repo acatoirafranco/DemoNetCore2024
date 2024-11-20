@@ -1,0 +1,97 @@
+# Starter pipeline
+# Start with a minimal pipeline that you can customize to build and deploy your code.
+# Add steps that build, run tests, deploy, and more:
+# https://aka.ms/yaml
+
+trigger: none
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  buildConfiguration: 'Release'
+
+stages:
+- stage: Net_Validate
+  jobs:
+    - job: Validation
+      continueOnError: false
+      steps:
+      - task: UseDotNet@2
+        displayName: 'Use .NET Core sdk'
+        inputs:
+            packageType: sdk
+            version: 8.0.x
+            installationPath: $(Agent.ToolsDirectory)/dotnet
+            
+      - task: DotNetCoreCLI@2
+        displayName: 'Install ReportGenerator'
+        inputs:
+            command: custom
+            custom: tool
+            arguments: 'install --global dotnet-reportgenerator-globaltool'      
+                        
+      - task: DotNetCoreCLI@2
+        displayName: 'Unit and Integration Test'
+        inputs:
+            command: test
+            projects: '**/*RestauranteApiTests.csproj'
+            arguments: '--configuration $(buildConfiguration) --collect "XPlat Code coverage" --logger trx'
+
+      - script: 'reportgenerator -reports:$(Agent.TempDirectory)/**/coverage.cobertura.xml -targetdir:$(Build.SourcesDirectory)/coverlet/reports -reporttypes:"Cobertura"'
+        displayName: 'Create reports'
+
+      - task: PublishTestResults@2
+        condition: succeededOrFailed()
+        displayName: Publish test results
+        inputs:
+          testRunner: VSTest
+          testResultsFiles: '**/*.trx'
+          searchFolder: '$(Agent.TempDirectory)'
+      
+      - task: PublishCodeCoverageResults@2
+        condition: succeededOrFailed()
+        displayName: Publish code coverage
+        inputs:
+          codeCoverageTool: Cobertura
+          summaryFileLocation: '$(Build.SourcesDirectory)/coverlet/reports/Cobertura.xml'
+          
+      - task: DotNetCoreCLI@2
+        displayName: dotnet restore
+        inputs:
+            command: restore
+            projects: '**/*RestauranteApi.csproj'
+      
+      - task: DotNetCoreCLI@2
+        inputs:
+            command: publish
+            projects: "**/*RestauranteApi.csproj"
+            publishWebProjects: false
+            arguments: '--configuration $(BuildConfiguration) --output $(Build.ArtifactStagingDirectory)\'
+            zipAfterPublish: false
+            modifyOutputPath: false
+            
+      - task: ArchiveFiles@2
+        displayName: 'Zip publish folder'
+        inputs:
+            rootFolderOrFile: '$(Build.ArtifactStagingDirectory)'
+            includeRootFolder: false
+            archiveType: 'zip'
+            archiveFile: '$(Build.ArtifactStagingDirectory)/$(Build.BuildNumber).zip'
+            replaceExistingArchive: true
+            
+      - task: PublishBuildArtifacts@1
+        displayName: 'Publish Build Artifact'
+        inputs:
+            PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+            ArtifactName: 'drop'
+            publishLocation: 'Container'
+            
+      - task: AzureWebApp@1
+        displayName: 'Azure Web App'
+        inputs:
+            azureSubscription: 'acatoira-subscription-service-connection'
+            appType: 'webAppLinux'
+            appName: 'acatoira-restaurante'
+            resourceGroupName: 'ACATOIRA'
+            package: '$(Build.ArtifactStagingDirectory)/**/*.zip'
